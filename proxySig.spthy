@@ -1,0 +1,1109 @@
+/*
+ *  Author: thyun.ahn
+ *  Model Name: Proxy Signature
+ *
+ *  Comments: TLS 1.2 with dhe key exchange
+ * 
+ *  1. matls_modification 이후 버전
+ *  2. 서버사양: 현재 c5a.8xlarge
+      > 사양 변경이력: t3.2xlarge -> c5.metal -> c5a.8xlarge
+    3. lemma proxy_verifiability 검증 작업 중 sorry 화면으로 넘어가지 않음
+      > ServerSendWarrant action 사용 시 rule MB_Server_Hello_UPDATED의 plus(multp()) 사용하면 안됨
+        > plus(multp()) 대신 그냥 <>으로 묶으면 잘됨..
+      > ServerSendWarrant 대신 MbSendWarrant로 하면 그냥 안됨..  rule MB_Server_Hello_UPDATED의 plus(multp())  대신 <>를 사용하더라도 안됨..
+
+ * Test 9 lemmas, and 1 source lemma  5/15: 10:15~11:53 (98 mins)
+   Test addion of Equal & verify 5/15: 18:15~ (aws:09:15~)
+ */
+
+
+theory proxySig
+begin
+
+builtins:   diffie-hellman, symmetric-encryption, signing, bilinear-pairing
+functions:  pk/1, sign/2, h/1, verify/3, true/0, senc/2, sdec/2, mac/2, decision/2, makeKey/2, designate/5, plus/2, multp/2, plusMultP/3
+
+// ----------------------------------------------------------//
+// ------------------------- Rules --------------------------//
+// ----------------------------------------------------------//
+
+
+//----------------------- Setup Rules -----------------------//
+
+rule Create_Server:
+    [ Fr(~key) ]
+  --[ CreateServer($S, ~key) ]->
+    [ !PublicKey('server', $S, pk(~key)), !PrivateKey('server', $S, ~key) ]
+
+rule Create_Middlebox:
+    [ Fr(~key) ]
+  --[ CreateMiddlebox($M, ~key) ]->
+    [ !PublicKey('middlebox', $M, pk(~key)), !PrivateKey('middlebox', $M, ~key) ]
+
+
+rule Corrupt_Server:
+    [ !PrivateKey('server', $S, key) ]
+  --[ RevealServer($S), LtkCorruptedServer(key) ]->
+    [ Out(key) ]
+
+
+rule Corrupt_Middlebox:
+    [ !PrivateKey('middlebox', $M, key) ]
+  --[ RevealMiddlebox($M), LtkCorruptedMiddlebox(key)  ]->
+    [ Out(key) ]
+
+
+//-------------------- 'Handshake' Rules --------------------//
+
+// nc: nonce-client, used in establishment of encryption and mac keys
+// details: for ciphersuites
+// send : client hello message(nonce, ciphersuites, accountability keys)
+rule Client_Hello:
+  let
+        c_extension = 'g_acc'^(~c_acc)
+        client_hello_msg = < 'client_hello', ~nc, ~c_details >
+  in
+    [
+        Fr(~nc)
+        , Fr(~c_acc)
+        , Fr(~c_details)
+    ]
+  --[
+        ForwardAction('hello', $C, $M)    // For middlebox_path_integrity Lemma
+    ]->
+    [ 
+        ClientHello(~nc, client_hello_msg, ~c_acc, c_extension)
+        , Out( <client_hello_msg, c_extension> ) 
+    ]
+
+
+// recv : client hello message(nonce, ciphersuites, accountability keys)
+// send : MB's client hello message & append MB's accountability key
+rule MB_Client_Hello_UPDATED:
+  let
+        // receive client hello message
+        client_hello_msg = < 'client_hello', nc, c_details >
+        
+        // generate MB's accountability key
+        mb_acc_pub = 'g_acc'^(~mb_acc)
+        
+        // generate MB's public & secret key pair based on Schnorr Signature (FOR PROXY!!)
+        mb_extension = <mb_acc_pub, pk(mb_ltk)>
+
+        // append to client's accountability key
+        c_mb_extension = < c_extension, mb_extension >
+        //mb_w_client_acc_key_param_1 = c_extension^(~mb_acc)       
+
+        // generate MB's client hello message to deliver to server
+        mb_client_hello_msg = < 'mb_client_hello', ~nmb, c_details >
+  in
+    [
+        Fr(~nmb)
+        , Fr(~mb_acc)
+        , !PrivateKey('middlebox', $M, mb_ltk)
+        , In( <client_hello_msg, c_extension> )
+    ]
+  --[
+        ForwardAction('hello', $M, $S)    // For middlebox_path_integrity Lemma
+        , MbSendPublicKey(pk(mb_ltk))
+        //, MbClientHelloTest(c_mb_extension, ~mb_acc)
+        //, RevealMbClientHello(~nmb, c_details)
+        
+    ]->
+    [ 
+        //MbClientHello(mb_client_hello_msg, ~mb_acc, mb_acc_pub, client_hello_msg, c_mb_extension, mb_w_client_acc_key_param_1)
+        MbClientHello(mb_client_hello_msg, c_mb_extension, client_hello_msg)
+        , Out( <mb_client_hello_msg, c_mb_extension> )
+    ]
+
+
+// include server hello, server certificate, server key exchange
+// recv : MB's client hello message(nonce, cipher suites, accountability keys)
+// send : server hello, server key exchange, server's certificate, accountability key
+//  > D (pki, pkj, ski, w, j)
+//    > * i: designator, j: proxy signer
+rule Server_Hello_UPDATED:
+  let
+        // receive client hello message
+        mb_extension = < mb_acc_pub, mb_pubkey >
+        c_mb_extension = < c_acc_pub, mb_extension >
+        mb_client_hello_msg = < 'mb_client_hello', nmb, c_details >
+        
+        // generate server's accountability key
+        s_acc_pub = 'g_acc'^(~s_acc)
+        s_extension = s_acc_pub
+
+        // server choose details (ex. cipher suites)
+        server_chosen_details = decision(c_details, ~s_details)
+        // server_chosen_details = <c_details, ~s_details>
+
+        // generate server hello message
+        server_hello_msg = < 'server_hello', ~ns, server_chosen_details >
+
+        // generate server's diffie hellman public key
+        s_dhe_pub = 'g_tls'^(~s_dhe)
+
+        // generate server key exchange message
+        server_key_exchange = s_dhe_pub
+        // sign server key exchange message with server's public key
+        server_key_exchange_signed = < server_key_exchange, sign(h(server_key_exchange), ltk) >
+
+        // server certificate (for Explicit Auth)
+        server_cert = < $S, pk(ltk) >
+
+        // generate 2 accountability keys in Fr()
+
+        // warrant (FOR PROXY!!)
+        warrant = ~warrant_fresh
+        //warrant = 'warrant'
+        //warrant = <server_cert, $M>
+
+        // delegate (FOR PROXY!!)
+        proxy_delegation = < pk(ltk), $M, mb_pubkey, warrant >
+        proxy_delegation_signed = sign(h(proxy_delegation), ltk)
+        proxy_delegation_signed_pair = < proxy_delegation, proxy_delegation_signed >
+  in
+    [ 
+        In( <mb_client_hello_msg, c_mb_extension> )
+        , !PrivateKey('server', $S, ltk)
+        , Fr(~ns)
+        , Fr(~s_acc)
+        , Fr(~s_dhe)
+        , Fr(~s_details)
+        , Fr(~server_acc_key)
+        , Fr(~server_w_mb_acc_key)
+        , Fr(~warrant_fresh)
+    ]
+  --[
+        ForwardAction('hello', $S, 'end')     // For middlebox_path_integrity Lemma
+        , BackwardAction('hello', $S, $M)     // For middlebox_path_integrity Lemma
+        , ServerSendDelegation( pk(ltk), mb_pubkey, warrant, proxy_delegation )         // For proxy_verifiability Lemma    // Test Script
+        //, Honest($S)
+        //, Honest($M)
+    ]->
+    [ 
+        Out( <server_hello_msg, server_key_exchange_signed, proxy_delegation_signed_pair, s_extension, server_cert> )   // (FOR PROXY!!)
+        , ServerHello( ~ns, ~s_dhe, ~server_acc_key, ~server_w_mb_acc_key, server_hello_msg, mb_client_hello_msg, server_key_exchange_signed, server_cert )   // 왜 주석처리 되었지?
+    ]
+
+
+// recv : server hello, server key exchange, server's certificate, accountability key
+// send : MB's server hello message(MB's chosen cipher suite)
+//      : , append accountability key to server's accountability key
+//      : , MB's key exchange as server
+//      : , MB's certificate 
+rule MB_Server_Hello_UPDATED:
+  let
+        // get server's certificate from session
+        server_cert = <$S, server_pubkey>
+
+        // details
+        server_chosen_details = decision( c_details, s_details )
+        //server_chosen_details = < c_details, s_details >
+
+        // receive server hello message
+        server_hello_msg = < 'server_hello', ns, server_chosen_details >
+
+        // get from session
+        mb_client_hello_msg =  < 'mb_client_hello', nmb, c_details >
+
+        // receive server key exchange
+        server_key_exchange_signed = < server_key_exchange, signature >
+        
+        // append MB's accountability key to server's accountability key (FOR PROXY!!)
+        mb_extension = <mb_acc_pub, pk(mb_ltk)>
+        c_mb_extension = < c_acc_pub, mb_extension >
+        s_mb_extension = < s_extension, mb_acc_pub >
+
+        // MB's key exchange message
+        mb_dhe_pub = 'g_tls'^(~mb_dhe)
+
+        // mb choose details as a server (ex. cipher suites)
+        mb_chosen_details = decision( c_details, ~mb_s_details )
+        //mb_chosen_details = < c_details, ~mb_s_details >
+
+        // generate server's hello message
+        mb_server_hello_msg = < 'mb_server_hello', nmb, mb_chosen_details >
+
+        // generate MB key exchange message
+        mb_server_key_exchange = mb_dhe_pub
+        
+        // sign mb server key exchange message with mb's public key
+        mb_server_key_exchange_signed = < mb_server_key_exchange, sign(h(mb_server_key_exchange), mb_ltk) >
+
+        // generate TLS keys in Fr() (TLS key #1)
+
+        // generate 2 accountability keys in Fr()
+
+        // proxy designated (FOR PROXY!!)
+        proxy_delegation = < server_pubkey, $M, pk(mb_ltk), warrant >    // (pki||j||pkj||w)
+        proxy_delegation_signed_pair = <proxy_delegation, proxy_delegation_signed>
+        
+        // Generate proxy signing key (FOR PROXY!!)
+        // (Y,s)
+        // Y = g^y                            --> Y = G*(~y)
+        // c = h(pki||j||pkj||w||Y)           --> c = h(pki||j||pkj||w||Y)
+        // r = h(pki||j||pkj||w||Y||c)        --> r = h(pki||j||pkj||w||Y||c)
+        // s = y + c*x      --> ???           --> s = (~y) + c*x (x= secret key)
+        // t = r*skj + s    --> <r, mb_ltk>   --> t = r*skj + s
+        //skp <- (pki||j||pkj||w, Y, t)
+        // ref1: https://ethz.ch/content/dam/ethz/special-interest/infk/inst-infsec/information-security-group-dam/research/software/noise_suter-doerig.pdf
+        // ref2: https://gitlab.surrey.ac.uk/jw00241/tamarin-models/-/blob/master/Chapter03_examples/schnorrSignature.fixed.spthy
+        Y = 'g_skp'^(~y)
+        c = h( <proxy_delegation, Y> )
+        r = h( <proxy_delegation, Y, c> )
+        s = plus(multp(c,mb_ltk), ~y)
+        t = plus(multp(r,mb_ltk), s)
+        //s =<c,mb_ltk, ~y>
+        //t = <r,mb_ltk, s>
+        skp = <proxy_delegation, Y, t>
+
+        // certificates (for Explicit Auth)
+        //mb_cert = sign(h(server_cert), skp)   // (FOR PROXY!!)
+        need_hash = h(<server_cert, server_pubkey, $M, pk(mb_ltk), warrant, Y, r>)
+        mb_cert = < $M, pk(mb_ltk), warrant, Y, sign(need_hash, t) >
+        certificate_chain = < server_cert, mb_cert >
+  in
+    [ 
+        In( <server_hello_msg, server_key_exchange_signed, proxy_delegation_signed_pair, s_extension, server_cert> )  // (FOR PROXY!!)
+        , MbClientHello(mb_client_hello_msg, c_mb_extension, client_hello_msg)
+        , !PrivateKey('middlebox', $M, mb_ltk)
+        , Fr(~mb_dhe)
+        , Fr(~mb_s_details)
+        , Fr(~mb_client_TLS_key)
+        , Fr(~mb_w_client_acc_key)
+        , Fr(~mb_w_server_acc_key)
+        , Fr(~y)    // (FOR PROXY!!)
+    ]
+  --[
+        BackwardAction('hello', $M, $C)   // For middlebox_path_integrity Lemma
+        , MbReceiveProxyDelegation(server_pubkey, pk(mb_ltk), proxy_delegation)
+        , MbGenerateProxySign(proxy_delegation, mb_ltk, Y, warrant, mb_cert)
+        //, Honest($S)
+        //, Honest($M)
+        //, MbSendProxySign(warrant, pk(mb_ltk), mb_cert) // For proxy_verifiability Lemma
+    ]->
+    [ 
+        Out( <mb_server_hello_msg, mb_server_key_exchange_signed, s_mb_extension, certificate_chain> )
+        , MbServerHello(~mb_dhe, certificate_chain, mb_client_hello_msg, server_hello_msg, ~mb_client_TLS_key, ~mb_w_client_acc_key, ~mb_w_server_acc_key, server_key_exchange_signed, client_hello_msg, mb_server_hello_msg, mb_server_key_exchange_signed, <proxy_delegation, Y, t, r>, mb_ltk)
+    ]
+
+
+// recv : MB's server hello
+//      : , MB's server key exchange 
+//      : , Server & MB's accountability key 
+//      : , server & middlebox certificate
+// Make client's sesssion key
+// send : Client key Exchange
+//      : client Finished message(client's received & sended Handshake messages)
+rule Client_Finished_UPDATED:
+  let
+        //mb_extension = < mb_acc_pub, mb_pubkey >
+        s_mb_extension = < s_extension, mb_acc_pub >
+        
+        server_cert =  < $S, server_pubkey >
+
+        need_hash = h(<server_cert, server_pubkey, $M, mb_pubkey, warrant, Y, r>)
+        signed_in_proxy = sign(need_hash, t)  // 일부만 lemma KU()에 넣어볼 것 (TODO::)
+        mb_cert = < $M, mb_pubkey, warrant, Y, signed_in_proxy >
+        certificate_chain = < server_cert, mb_cert >
+
+        // PV(Proxy Signature Verification)
+        // 1. Generate proxy public key
+        //  > c = h(pki||j||pkj||w||Y)
+        //  > r = h(pki||j||pkj||w||Y||c)
+        //  > pkp = pkj^(r) * Y * pki^(c)
+        c = h( <server_pubkey, $M, mb_pubkey, warrant, Y> )
+        pkp = multp( multp(mb_pubkey^r, Y), server_pubkey^c )
+        //pkp = <mb_pubkey^r, Y, server_pubkey^c>
+
+        // PV( pki, M, (j, pkj, w, Y, signed_in_proxy) ) // proxy_signature = sign(h(<server_cert, server_pubkey, $M, warrant, Y, r>), t)
+        // 2.verify Middlebox Message by using pkp
+        //verify( signed_in_proxy, h(<server_cert, server_pubkey, $M, mb_pubkey, warrant, Y, r>), pkp )
+
+        // middlebox server hello msg
+        mb_server_hello_msg = < 'mb_server_hello', nmb, mb_chosen_details >
+
+        // middlebox key exchange signed msg
+        mb_server_key_exchange_signed = <mb_server_key_exchange, mb_signature>
+
+        // generate client 2 accountability keys in Fr()
+
+        // client Session key in Fr() (TLS key #2)
+
+        // client key Exchange
+        client_key_exchange = 'g_tls'^(~c_dhe)
+
+        //// client Finished message
+        client_HS_msg_sent = < client_hello_msg, client_key_exchange >
+        client_HS_msg_recv = < mb_server_hello_msg, mb_server_key_exchange_signed, mb_cert >
+        client_finished_msg = < client_HS_msg_sent, client_HS_msg_recv >
+        client_finished_enc = senc( h(client_finished_msg), ~client_TLS_key )
+  in
+    [ 
+        In( <mb_server_hello_msg, mb_server_key_exchange_signed, s_mb_extension, certificate_chain> )
+        , ClientHello(nc, client_hello_msg, c_acc, c_acc_pub)
+        , Fr(~c_dhe)
+        , Fr(~client_TLS_key)
+        , Fr(~client_server_acc_key)
+        , Fr(~client_w_mb_acc_key)
+    ]
+  --[
+        Equal( verify(signed_in_proxy, need_hash, pkp), true )   // Equal( verify(signed_in_proxy, need_hash, pkp) )        // verify(signed, plain, publicKey)
+        , OutClientFinished(client_finished_enc)          // For source Lemma
+        , ForwardAction('finished', $C, $M)           // For middlebox_path_integrity Lemma
+        , BackwardAction('hello', $C, 'end')          // For middlebox_path_integrity Lemma
+        , ClientReceivedProxySign(warrant, mb_pubkey, mb_cert)   // For proxy_verifiability Lemma
+    ]->
+    [ 
+        Out( < client_key_exchange, client_finished_enc > )
+        , ClientFinished(nc, ~client_TLS_key, ~client_server_acc_key, ~client_w_mb_acc_key, pkp)
+    ]
+
+
+
+// recv : Client key Exchange
+//      : client Finished message
+// make MB's session key as server with client's key exchange
+// send : Middlebox key exchange as client
+//      : Middlebox Finished message
+rule MB_Client_Finished:
+  let
+        // get from session
+        mb_client_hello_msg = < 'mb_client_hello', nmb, c_details >
+        server_hello_msg =  < 'server_hello', ns, server_chosen_details >
+        
+        // server cert
+        certificate_chain = < server_cert, mb_cert >        
+        
+        // generate TLS key #3 in Fr()
+
+        // client Finished
+        client_finished_enc = senc( h(client_finished_msg), ~mb_server_TLS_key )    // 추가
+        
+        // MB client key exchange
+        mb_client_key_exchange = 'g_tls'^(mb_dhe)
+        
+        // make mb_client_finished message and send to server
+        mb_client_HS_msg_sent = < mb_client_hello_msg, mb_client_key_exchange >
+        mb_client_HS_msg_recv = < server_hello_msg, server_key_exchange_signed, server_cert>
+        mb_client_finished_msg = < mb_client_HS_msg_sent, mb_client_HS_msg_recv >
+        mb_client_finished_enc = senc(h(mb_client_finished_msg), mb_client_TLS_key)        
+  in
+    [
+        In( < client_key_exchange, client_finished_enc > )
+        , MbServerHello(mb_dhe, certificate_chain, mb_client_hello_msg, server_hello_msg, mb_client_TLS_key, mb_w_client_acc_key, mb_w_server_acc_key, server_key_exchange_signed, client_hello_msg, mb_server_hello_msg, mb_server_key_exchange_signed, <proxy_delegation, Y, t, r>, mb_ltk)
+        , Fr(~mb_server_TLS_key)
+    ]
+  --[
+        InMbClientFinished(client_finished_enc, client_finished_msg)  // For source lemma
+        , ForwardAction('finished', $M, $S)   // For middlebox_path_integrity Lemma
+    ]->
+    [ 
+        Out( < mb_client_key_exchange, mb_client_finished_enc > )
+        , MbClientFinished(mb_dhe, certificate_chain, mb_client_TLS_key, ~mb_server_TLS_key, mb_w_client_acc_key, mb_w_server_acc_key, client_hello_msg, client_key_exchange, mb_server_hello_msg, mb_server_key_exchange_signed, server_hello_msg, <proxy_delegation, Y, t, r>, mb_ltk )    // , mb_client_TLS_key 추가
+    ]
+
+
+// recv : MB Client key Exchange
+//      : MB client Finished message
+// send : server Finished message
+//      : matls_message
+rule Server_Finished:
+  let
+        // mb client hello message
+        mb_client_hello_msg = < 'mb_client_hello', nmb, c_details >
+
+        // server hello message
+        server_hello_msg = < 'server_hello', ns, server_chosen_details >
+        
+        // server certificate
+        server_cert = < $S, pk(ltk) >
+
+        // generate server's tls session key in Fr() (TLS key #4)
+        mb_client_key_exchange = 'g_tls'^(mb_dhe)
+        server_pre_master_secret = mb_client_key_exchange^(s_dhe)
+        //server_TLS_key = makeKey( <server_pre_master_secret, 'label', <nmb, ns>> )
+        
+        // decrypt MB client finished encrypted message
+        mb_client_finished_enc = senc(h(mb_client_finished_msg), ~server_TLS_key)
+
+        // generate server's Finished message
+        server_HS_msg_sent  = < server_hello_msg, server_key_exchange_signed, server_cert >
+        server_HS_msg_recv  = < mb_client_hello_msg, mb_client_key_exchange, h(mb_client_finished_msg) >
+        server_finished_msg = < server_HS_msg_sent, server_HS_msg_recv >
+        server_finished_hashed = h(server_finished_msg)
+        server_finished_enc = senc(server_finished_hashed, ~server_TLS_key)
+
+        // generate security parameter blocks
+        server_matls_params = < server_chosen_details, server_finished_hashed >
+        server_matls_hashed = mac( < server_matls_params, 'origin'>, server_acc_key )
+        server_matls_sign = sign(server_matls_hashed, ltk)    
+        server_matls_spb = < server_matls_params, server_matls_hashed, server_matls_sign > 
+        server_matls_spb_enc = senc(server_matls_spb, ~server_TLS_key)
+  in
+    [
+        In( < mb_client_key_exchange, mb_client_finished_enc > )
+        , ServerHello( ns, s_dhe, server_acc_key, server_w_mb_acc_key, server_hello_msg, mb_client_hello_msg, server_key_exchange_signed, server_cert)
+        , Fr(~server_TLS_key)
+    ]
+  --[
+        OutServerFinished(server_matls_spb_enc) // For source lemma
+        , ForwardAction('finished', $S, 'end')    // For middlebox_path_integrity Lemma
+        , BackwardAction('finished', $S, $M)      // For middlebox_path_integrity Lemma
+        , ServerHandshakeComplete($C, $S, ns)     // For server_authentication Lemma
+    ]->
+    [ 
+        Out( < server_finished_enc, server_matls_spb_enc > )
+        , !ServerSession(~server_TLS_key, ns, server_acc_key)
+    ]
+
+// recv : server finished message
+//      : server security parameter block
+// send : MB server finished message
+//      : MB security paramater block
+rule MB_Server_Finished_UPDATED:
+  let
+        // get from session
+        // client hello message
+        client_hello_msg = < 'client_hello', nc, c_details >
+        // mb server hello_message
+        mb_server_hello_msg =  < 'mb_server_hello', nmb, mb_chosen_details >
+        // server hello message
+        server_hello_msg = < 'server_hello', ns, server_chosen_details >
+
+        // middlebox certificate
+        //mb_cert = < $M, pk(mb_ltk) >
+        certificate_chain = <server_cert, mb_cert>
+
+        // [[[ As a client ]]]
+        // MB client key exchange
+        mb_client_key_exchange = 'g_tls'^(mb_dhe)
+
+        // check server's finished message 
+        server_finished_enc = senc(server_finished_hashed, mb_client_TLS_key)
+
+        // received server's security parameter block
+        server_matls_spb = < server_matls_params, server_matls_hashed, server_matls_sign > 
+        server_matls_spb_enc = senc(server_matls_spb, server_TLS_key)
+
+        // [[[ As a server ]]]        
+        // generate MB as a server's Finished message 
+        mb_server_HS_msg_sent = < mb_server_hello_msg, mb_server_key_exchange_signed, mb_cert >
+        mb_server_HS_msg_recv  = < client_hello_msg, client_key_exchange, < <client_hello_msg, client_key_exchange>, <mb_server_hello_msg, mb_cert> > >
+        mb_server_finished_msg = < mb_server_HS_msg_sent, mb_server_HS_msg_recv >
+        mb_server_finished_hashed = h( mb_server_finished_msg )
+        mb_server_finished_enc = senc( mb_server_finished_hashed, mb_server_TLS_key )
+        //mb_server_finished_enc = senc( mb_server_finished_hashed, ~mb_server_TLS_key )
+
+        proxy_delegation = < server_pubkey, $M, pk(mb_ltk), warrant >    // (pki||j||pkj||w)
+
+        //Y = 'g_skp'^(~y)
+        //c = h( <proxy_delegation, Y> )
+        //r = h( <proxy_delegation, Y, c> )
+        //s = plus(multp(c,mb_ltk), ~y)
+        //t = plus(multp(r,mb_ltk), s)
+        ////s =<c,mb_ltk, ~y>
+        ////t = <r,mb_ltk, s>
+        //skp = <proxy_delegation, Y, t>
+
+        // generate security parameter block
+        mb_matls_params = < mb_chosen_details, mb_server_finished_hashed >
+        mb_matls_hashed = mac( <mb_matls_params, server_matls_params>, mb_w_client_acc_key )
+        //mb_matls_sign = sign(mb_matls_hashed, mb_ltk) (FOR PROXY!!)
+        need_hash = h(<mb_matls_hashed, server_pubkey, $M, pk(mb_ltk), warrant, Y, r>)   //  need_hash = h(<server_cert, server_pubkey, $M, pk(mb_ltk), warrant, Y, r>)
+        mb_matls_sign = < $M, pk(mb_ltk), warrant, Y, sign(need_hash, t) >
+
+        mb_matls_spb = < mb_matls_params, mb_matls_hashed, mb_matls_sign > 
+        matls_chain = < mb_matls_spb, server_matls_spb >
+        matls_chain_enc = senc(matls_chain, mb_server_TLS_key)
+        //matls_chain_enc = senc(matls_chain, ~mb_server_TLS_key)
+  in
+    [
+        In( < server_finished_enc, server_matls_spb_enc > )
+        , MbClientFinished(mb_dhe, certificate_chain, mb_client_TLS_key, mb_server_TLS_key, mb_w_client_acc_key, mb_w_server_acc_key, client_hello_msg, client_key_exchange, mb_server_hello_msg, mb_server_key_exchange_signed, server_hello_msg, <proxy_delegation, Y, t, r>, mb_ltk )   //mb_client_TLS_key 추가 
+    ]
+  --[ 
+        InMbServcerFinished(server_matls_spb_enc, server_matls_spb)                         // For source lemma
+        , BackwardAction('finished', $M, $C)                                                  // For middlebox_path_integrity Lemma
+        , MiddleboxHandshakeComplete($C, $M, $C, $S, nc)                                      // For middlebox_authentication Lemma
+        , MiddleboxDetails($C, $M, nc, mb_chosen_details, server_chosen_details)              // For path_secrecy Lemma
+        , MbReceiveProxyDelegationForSpb(server_pubkey, pk(mb_ltk), proxy_delegation)   // For proxy_strong_identifiability Lemma
+        , MbGenerateProxySignForSpb(proxy_delegation, mb_ltk, Y, warrant, mb_matls_sign)                          // For proxy_strong_identifiability Lemma. // MbGenerateProxySign(c * mb_ltk, y, gy, s, r * mb_ltk, t, warrant, mb_cert)
+    ]->
+    [ 
+        Out( < mb_server_finished_enc, matls_chain_enc > )
+        , !MbSession( nmb,  mb_client_TLS_key, mb_server_TLS_key, mb_w_client_acc_key, mb_w_server_acc_key )  // TODO::REAL
+    ]
+
+rule Client_Complete_UPDATED:
+  let
+        // check mb server's finished message 
+        mb_server_finished_enc = senc(mb_server_finished_hashed, client_TLS_key)
+
+        // check received matls security parameter block
+        server_matls_params =  < decision(c_details, s_details), server_finished_hashed >
+        server_matls_hashed = mac(< server_matls_params, 'origin'>, client_server_acc_key  )             
+        server_matls_spb = < server_matls_params, server_matls_hashed, server_matls_sign > 
+        
+        mb_matls_params =  < decision(c_details, mb_s_details), mb_server_finished_hashed >
+        mb_matls_hashed = mac( <mb_matls_params, server_matls_params>, client_w_mb_acc_key )
+        
+        // mb_matls_sign
+        need_hash = h(<mb_matls_hashed, server_pubkey, $M, mb_pubkey, warrant, Y, r>)
+        signed_in_proxy = sign(need_hash, t)
+        //verify( signed_in_proxy, h(<server_cert, server_pubkey, $M, mb_pubkey, warrant, Y, r>), pkp )
+        mb_matls_sign = < $M, mb_pubkey, warrant, Y, signed_in_proxy >
+
+        mb_matls_spb = < mb_matls_params, mb_matls_hashed, mb_matls_sign > 
+        matls_chain = < mb_matls_spb, server_matls_spb >
+        matls_chain_enc = senc(matls_chain, client_TLS_key)
+  in
+    [ 
+        In( < mb_server_finished_enc, matls_chain_enc > )
+        , ClientFinished(nc, client_TLS_key, client_server_acc_key, client_w_mb_acc_key, pkp)
+    ]
+  --[
+        Equal( verify(signed_in_proxy, need_hash, pkp), true )  // verify(signed, plain, publicKey)
+        , BackwardAction('finished', $C, 'end')                 // For middlebox_path_integrity Lemma
+        , ClientHandshakeComplete($C, $S, nc)                   // For server_authentication Lemma, // For path_secrecy Lemma
+        , PathOrderingEstablished($C, $M)                       // For middlebox_path_integrity Lemma
+        , PathOrderingEstablished($M, $S)                       // For middlebox_path_integrity Lemma
+        , ClientMiddleboxDetails($C, $M, nc, c_details)         // For path_secrecy Lemma
+        , ClientReceivedProxySignForSpb(warrant, mb_pubkey, mb_matls_sign)   // For proxy_verifiability Lemma
+    ]->
+    [ 
+        !ClientSession( nc, client_TLS_key, client_server_acc_key, client_w_mb_acc_key )
+    ]
+
+
+
+//------------------ 'Communication' Rules ------------------//
+
+rule Client_Request:
+  let       
+        client_matls_ml = < $C, mac( h(~c_msg), client_server_acc_key ) >
+        req_msg = < ~c_msg, client_matls_ml > 
+        req_msg_enc = senc( req_msg, client_TLS_key )
+  in
+    [  
+        !ClientSession( nc, client_TLS_key, client_server_acc_key, client_w_mb_acc_key )
+        , Fr(~c_msg)
+        , Fr(~acc_key_test)
+    ]
+  --[  
+        OutClientRequest(req_msg_enc) // For source lemma
+        , ForwardAction(~c_msg, $C, $M)   // For middlebox_path_integrity Lemma
+    ]->
+    [  
+        Out( req_msg_enc )
+        , ClientRequest( ~c_msg)
+    ]
+
+
+rule MB_Client_Request:
+  let
+        // received from client
+        client_matls_ml = < $C, client_mac >
+        req_msg = < c_msg, client_matls_ml >
+        req_msg_enc = senc( req_msg, mb_server_TLS_key )
+        //req_msg_enc = senc( req_msg, ~mb_server_TLS_key )
+
+        // generate Modification Log (msg not modified by MB)   
+        mb_matls_ml = < $C, mac(client_mac, mb_w_server_acc_key) >
+        mb_msg_enc = senc( <c_msg, mb_matls_ml>, mb_client_TLS_key ) 
+  in
+    [ 
+        In( req_msg_enc )
+        , !MbSession( nmb, mb_client_TLS_key, mb_server_TLS_key, mb_w_client_acc_key, mb_w_server_acc_key )
+        //, !MbSession( nmb, mb_client_TLS_key, ~mb_server_TLS_key, mb_w_client_acc_key, mb_w_server_acc_key )
+    ]
+  --[ 
+        InMbClientRequest ( req_msg_enc, req_msg )  // For source lemma
+        , ForwardAction(c_msg, $M, $S)            // For middlebox_path_integrity Lemma
+   ]->
+    [ 
+        Out(mb_msg_enc)
+        , MbRequest(c_msg)
+    ]
+
+
+
+rule Server_Reply:
+  let
+        //mb_matls_ml = < $C, client_mb_mac >   // client_mb_mac = mac(mb_w_server_acc_key, client_mac)     //  굳이 필요없어 보임. TODO::
+                                                // client_mac =  mac( client_server_acc_key, h(~c_msg) )
+        mb_msg_enc  = senc( <c_msg, mb_matls_ml>, server_TLS_key )
+
+        server_matls_ml = < $S, mac( h(~s_resp), server_acc_key ) >   // Modification Log
+        res_msg = < ~s_resp, server_matls_ml >                      
+        res_msg_enc = senc( res_msg, server_TLS_key )               
+  in
+    [ 
+        In(mb_msg_enc)
+        //, !ServerSession(ns, server_TLS_key, server_acc_key, server_w_mb_acc_key)
+        , !ServerSession(server_TLS_key, ns, server_acc_key)
+        , Fr(~s_resp)
+    ]
+  --[
+        OutServerReply(res_msg_enc)               // For source lemma
+        , ForwardAction(c_msg, $S, 'end')       // For middlebox_path_integrity Lemma
+        , BackwardAction(~s_resp, $S, $M)       // For middlebox_path_integrity Lemma
+        , ServerResponseComplete($C, $S, c_msg) // For server_authentication Lemma
+        , ServerSent($C, $S, c_msg, ~s_resp)    // For data_authentication Lemma
+    ]->
+    [ 
+        Out(res_msg_enc)
+    ]
+
+//rule MB_Server_Reply_NoModification:
+
+/***
+rule MB_Server_Reply_Modification:
+  let
+        server_matls_ml = < $S, server_mac >    // Server's ML
+        res_msg =  < s_resp, server_matls_ml >
+        res_msg_enc = senc( res_msg, mb_client_TLS_key )
+
+        // MB modifies message        
+        mb_matls_ml_reply = < $M, h(~msg_change), mac( h(~msg_change), mb_w_client_acc_key ), h(s_resp), server_matls_ml >    // Modification Log
+        mb_msg_reply_enc = senc( <s_resp, mb_matls_ml_reply>, mb_server_TLS_key )
+  in
+    [ 
+        In(res_msg_enc)
+        , !MbSession( nmb, mb_client_TLS_key, mb_server_TLS_key, mb_w_client_acc_key, mb_w_server_acc_key )
+        , MbRequest(c_msg)
+        , Fr(~msg_change)
+    ]
+  --[
+        InMbServerReply (res_msg_enc, res_msg )  // For source lemma
+        //, BackwardAction(s_resp, $M, $C)    // For middlebox_path_integrity Lemma
+        //, MiddleboxResponseComplete($C, $M, $C, $S, c_msg)  // For middlebox_authentication Lemma
+        //, MiddleboxChanges($C, $M, c_msg, s_resp, ~msg_change)  // modification // For modification_accountability Lemma
+    ]->
+    [ 
+        Out(mb_msg_reply_enc)
+    ]
+***/
+
+
+rule MB_Server_Reply_NoModification:
+  let
+        server_matls_ml = < $S, server_mac >
+        res_msg =  < s_resp, server_matls_ml >
+        res_msg_enc = senc( res_msg, mb_client_TLS_key )
+        
+        mb_matls_ml_reply = < $S, mac(server_mac, mb_w_client_acc_key) >
+        mb_msg_reply_enc = senc( <s_resp, mb_matls_ml_reply>, mb_server_TLS_key )
+  in
+    [ 
+        In(res_msg_enc)
+        , !MbSession( nmb, mb_client_TLS_key, mb_server_TLS_key, mb_w_client_acc_key, mb_w_server_acc_key )
+        , MbRequest(c_msg)
+    ]
+  --[
+        InMbServerReply (res_msg_enc, res_msg )   // For source lemma
+        , BackwardAction(s_resp, $M, $C)
+        , MiddleboxResponseComplete($C, $M, $C, $S, c_msg)
+        , MiddleboxChanges($C, $M, c_msg, s_resp, s_resp)    // no modification
+    ]->
+    [ 
+        Out(mb_msg_reply_enc)
+    ]
+
+
+rule Client_Receive:
+  let       
+        //mb_matls_ml_reply = < $S, server_mb_mac >   // no modification version
+        mb_matls_ml_reply = < $M, h(msg_change), mb_mac, h(s_resp), server_matls_ml >   // modification version
+        mb_msg_reply_enc = senc( <s_resp, mb_matls_ml_reply>, client_TLS_key )
+  in
+    [ 
+        In(mb_msg_reply_enc)
+        , !ClientSession( nc, client_TLS_key, client_server_acc_key, client_w_mb_acc_key )
+        , ClientRequest( c_msg)
+    ]
+  --[
+        BackwardAction(s_resp, $C, 'end')     // For middlebox_path_integrity Lemma
+        , ClientResponseComplete($C, $S, c_msg) // For server_authentication Lemma  // For modification_accountability Lemma
+        , ClientHandshakeMiddleboxComplete($C, $M, $C, $S, nc)    // For middlebox_authentication Lemma
+        , ClientResponseMiddleboxComplete($C, $M, $S, $C, c_msg)  // For middlebox_authentication Lemma
+        , ClientSeesChange($C, $M, c_msg, s_resp, msg_change)   // Modification // For modification_accountability Lemma
+        , ClientBelivesServerSent($C, $S, c_msg, s_resp)    // For data_authentication Lemma
+    ]->
+    [  ]
+
+/********************
+********************/
+
+restriction equal:  // add
+"
+  All a b #t. Equal(a, b)@t ==> a = b
+"
+
+/********************
+********************/
+
+lemma source_lemma[sources]:
+all-traces
+"
+  ( // Source Lemma True를 만든 clause <- solution #1
+    All enc msg  #i.
+      InMbClientFinished( enc, msg ) @ i
+      ==> 
+        ( 
+          ( Ex #j. KU(msg) @ j & j < i )
+          |
+          (Ex #j. OutClientFinished(enc) @ j & j<i )
+        )
+  )   // 6 mins
+  &
+  (   // 이 clause 만으로 handshake p.d. 해결
+    All enc msg  #i.
+      InMbServcerFinished( enc, msg ) @ i
+      ==> 
+        ( 
+          ( Ex #j. KU(msg) @ j & j < i )
+          |
+          (Ex #j. OutServerFinished(enc) @ j & j<i )
+        )
+  )
+  &
+  (
+    All enc msg #i.
+      InMbClientRequest( enc, msg ) @ i
+      ==> 
+        ( 
+          (Ex #j. KU(msg) @ j & j < i)
+          | 
+          (Ex #j. OutClientRequest( enc ) @ j & j<i)
+        )
+  ) // 21:46~00:52 killed... (대략 3시간 소요)
+    // decision 지우고 다시 시도
+    //  > 00:56~05:00 killed... (대략 4시간 소요)
+    //  > 만약 안되면
+    //    > MB_Client_Request rule의 out 주석 -> 10~15분 후 Result: True
+    //    > Server Reply rule까지 살려서 test -> 3~4시간 후 killed...
+    //      > 안되면 MB_Client_Request -> Server_Reply 사이에 lemma 추가 -> 19:51~20:54 까지 계속 실행 중. 안될 것 같음. interrupt kill.
+    //    > Server_Reply rule 주석처리. MB_Client_Request rule에서 mb_client_TLS_key 대신 새로운 Fr()로 테스트. 20:58~21:31 Result: True
+    //      > 다시 테스트. 22:50~23:30 . killed 발생
+    //      > 3차 테스트. 23:33~00:02. Result: True
+    //    > Server_Reply rule 주석처리. MB_Client_Request rule에서 mb_w_server_acc_key 대신 새로운 Fr()로 테스트. 21:48~22:45 까지 계속 실행 중. 안될 것 같음. interrupt kill.
+    //    > MbClientFinished에서 mb_client_TLS_key를 누락한 부분이 있어서 보완 후 테스트. 00:58~00:59 True <- solution #2
+    //    > key에 ~ 추가 
+    //    > 제일 사양 높은 서버로 테스트
+  & 
+  (
+    All enc msg #i.
+      InMbServerReply ( enc, msg ) @ i
+      ==> 
+        ( 
+          (Ex #j. KU(msg) @ j & j < i)
+          | 
+          (Ex #j. OutServerReply( enc ) @ j & j<i)
+        )
+  ) // 50분 돌린 후 killed...
+    //  > MB_Server_Reply_NoModification rule에서 mb_server_TLS_key 대신 새로운 Fr()로 테스트. 13:36~14:13.  Result: True
+    //  > mb_server_TLS_key에 ~ 추가하여 테스트. 14:22~15:22. Result: killed...
+    //  > MB_Server_Reply_NoModification rule에서 mb_w_client_acc_key 대신 새로운 Fr()로 테스트. 15:24~.  Result: 
+    //  > MB_Server_Reply_NoModification rule에서 res_msg_enc 관련 문단(?)만 살려서 테스트. 21:43~22:17. Result: True <- 오래 걸림. 직전 단계는 10분이내였는데 30분 가량 소요됨.
+    //  > MB_Server_Reply_NoModification rule에서 Out만 주석 후 테스트. 22:51~23:29. Result: True
+    //  > 제일 사양 높은 서버로 테스트, MB_Server_Reply_NoModification rule의 Out 주석 해제
+    //    > 현재: t3.2xlarge -> c5.metal. 00:01~01:09. Result: True
+    //    > 위에 mb_server_TLS_key에 ~를 추가한 부분이 있어서 ~를 없애고 다시 c5.metal로 테스트. 01:14~02:21. Result: True
+    //    > decision 원복 후 테스트. 02:26~03:15 . Result: True
+"
+
+lemma server_authentication:
+  "
+    (
+      All C S noncesclient #tclient. ClientHandshakeComplete(C, S, noncesclient)@tclient ==>
+        Ex noncesserver #tserver. ServerHandshakeComplete(C, S, noncesserver)@tserver 
+        & (#tserver < #tclient) 
+    )
+    &
+    (
+      All C S req #tclient. ClientResponseComplete(C, S, req)@tclient ==>
+        Ex #tserver. ServerResponseComplete(C, S, req)@tserver & (#tserver < #tclient)
+    )
+  "
+
+lemma middlebox_authentication:
+  "
+    (
+      All C M lastBox nextBox nonces #tclient. ClientHandshakeMiddleboxComplete(C, M, lastBox, nextBox, nonces)@tclient ==>
+        Ex #tmbox. MiddleboxHandshakeComplete(C, M, lastBox, nextBox, nonces)@tmbox 
+        & (#tmbox < #tclient)  
+    )
+    & 
+    ( // Response phase
+      All C M lastBox nextBox req #tclient. ClientResponseMiddleboxComplete(C, M, lastBox, nextBox, req)@tclient ==>
+        Ex #tmbox. MiddleboxResponseComplete(C, M, lastBox, nextBox, req)@tmbox & (#tmbox < #tclient)
+    )
+  "
+
+lemma middlebox_path_integrity:
+  "
+    All a1 a2 a3 #ta #tb.
+      PathOrderingEstablished(a1, a2)@ta &
+      PathOrderingEstablished(a2, a3)@tb ==>
+          ( All id #tf. ForwardAction(id, a2, a3)@tf ==>
+              Ex #tp. ForwardAction(id, a1, a2)@tp &
+              (#tp < #tf) // on forward trips, it is a1->a2->a3
+          ) & (
+            All id #tf. BackwardAction(id, a2, a1)@tf ==>
+              Ex #tp. BackwardAction(id, a3, a2)@tp &
+              (#tp < #tf) // on backward trips, it is a3->a2->a1
+          )
+  "
+
+lemma path_secrecy:
+  "
+    All C M S nonces clientDetails #tclient #tcomplete. 
+      ClientMiddleboxDetails(C, M, nonces, clientDetails)@tclient 
+      & ClientHandshakeComplete(C, S, nonces)@tcomplete ==>
+        Ex mboxDetails serverDetails #tmbox. // the sessions in both directions are derives from the details 
+          MiddleboxDetails(C, M, nonces, decision(clientDetails, mboxDetails), decision(clientDetails, serverDetails))@tmbox
+          & (#tmbox < #tclient)
+  "
+
+// At the end of a request->response cycle, the client believes
+// that a middlebox changed the value of the response if and only
+// if the middlebox did so
+lemma modification_accountability:
+  "
+  All C S req #tclient. ClientResponseComplete(C, S, req)@tclient ==>
+      ( All before after M #tc.
+        (
+           ( ClientSeesChange(C, M, req, before, after)@tc ) &
+           (( #tc < #tclient ) | (#tc = #tclient))
+        )
+           ==>
+              Ex #tm. 
+              (
+                ( MiddleboxChanges(C, M, req, before, after)@tm ) &
+                ( #tm < #tc )
+              )
+      )
+      & // Same clause but the other way around
+      ( All before after M #tm.
+        (
+           ( MiddleboxChanges(C, M, req, before, after)@tm ) &
+           ( #tm < #tclient ) 
+        )
+           ==>
+              Ex #tc. 
+              (
+                ( ClientSeesChange(C, M, req, before, after)@tc ) &
+                ( #tm < #tc )
+              )
+      )
+  "
+
+// At the end of a request->response cycle, the hash value
+// that the client received from the server is a faithful
+// representation of what the server sent
+// (Note that the client cannot actually read the initial
+// server message, but should be aware of when it changed)
+
+lemma data_authentication:
+  "
+  All C S request response #trecv.
+     ClientBelivesServerSent(C, S, request, response)@trecv ==>
+        Ex #tresp. ServerSent(C, S, request, response)@tresp
+  "
+
+//1. multp, plus 살려서 다시 lemma 검증
+//2. warrnat 외에 다른 designation 변수들도 포함시킬 것
+//3. designation action 추가
+
+
+// [Description]
+//  Client는 MB가 보내온 proxy 서명을 통해서 원서명자인 Server가 동의한 서명인지를 검증(확인) 할 수 있어야 함. (proxy 서명값을 통해 server를 검증할 수 있어야 함)
+lemma proxy_verifiability:
+"  
+  (
+    All warrant mbLtk mbCert #tc.
+      ClientReceivedProxySign(warrant, pk(mbLtk), mbCert) @ tc
+      ==>
+          All delegation gy #tmb.
+            MbGenerateProxySign(delegation, mbLtk, gy, warrant, mbCert) @ tmb & KU(gy) @ tmb & not(Ex #tmb. KU(mbLtk) @ tmb)
+            ==>
+              Ex sPub #ts.
+                ServerSendDelegation(sPub, pk(mbLtk), warrant, delegation) @ ts & (#ts < #tmb) & KU(sPub) @ ts
+  )
+  &
+  (
+    All warrant mbLtk mbSign #tc.
+      ClientReceivedProxySignForSpb(warrant, pk(mbLtk), mbSign) @ tc
+      ==>
+          All delegation gy #tmb.
+            MbGenerateProxySignForSpb(delegation, mbLtk, gy, warrant, mbSign) @ tmb & KU(gy) @ tmb & not(Ex #tmb. KU(mbLtk) @ tmb)
+            ==>
+              Ex sPub #ts.
+                ServerSendDelegation(sPub, pk(mbLtk), warrant, delegation) @ ts & (#ts < #tmb) & KU(sPub) @ ts
+  )
+
+
+  //(
+  //  All warrant mb_cert #tc.
+  //    ClientReceivedProxySign(warrant, mb_cert) @ tc
+  //    ==>
+  //        All mb_pubkey #tmb.
+  //          ( (MbSendProxySign( warrant, mb_pubkey, mb_cert) @ tmb) & (KU(mb_pubkey)@tmb) & (#tmb < #tc) )
+  //          ==>
+  //            (
+  //              (
+  //                Ex #ts. (KU(mb_pubkey) @ ts) & (#ts < tmb) 
+  //              )
+  //              &
+  //              (
+  //                Ex #ts.
+  //                  (ServerSendDelegation(warrant) @ ts) & (#ts < #tmb)
+  //              )
+  //            )
+  //)
+  //&
+  //(
+  //  All warrant mb_matls_sign #tc.
+  //    ClientReceivedProxySignForSpb(warrant, mb_matls_sign) @ tc
+  //    ==>
+  //        All mb_pubkey #tmb.
+  //          ( (MbSendProxySignForSpb( warrant, mb_pubkey, mb_matls_sign) @ tmb) & (KU(mb_pubkey)@tmb) & (#tmb < #tc) )
+  //          ==>
+  //            (
+  //              (
+  //                Ex #ts. (KU(mb_pubkey) @ ts) & (#ts < tmb) 
+  //              )
+  //              &
+  //              (
+  //                Ex #ts.
+  //                  (ServerSendDelegation(warrant) @ ts) & (#ts < #tmb)
+  //              )
+  //            )
+  //) // true
+"
+
+
+// [Description]
+// 대리서명자로 지정되지 않은 원서명자 또는 제3자는 유효한 대리서명값을 생성할 수 없으며, 오로지 대리서명자만 유효한 대리서명이 가능.
+lemma proxy_strong_unforgeability:
+"
+  (
+    All warrant mbLtk mbCert #tc.
+      ClientReceivedProxySign(warrant, pk(mbLtk), mbCert) @ tc
+      ==>
+        All delegation gy sPub #tmb.
+          ( MbGenerateProxySign(delegation, mbLtk, gy, warrant, mbCert) @ tmb & KU(gy) @ tmb & not(Ex #tmb. KU(mbLtk) @ tmb) )
+          &
+          ( MbReceiveProxyDelegation(sPub, pk(mbLtk), delegation) @ tmb )
+          ==>
+            All #ts.
+              ServerSendDelegation(sPub, pk(mbLtk), warrant, delegation) @ ts & KU(sPub) @ ts
+              ==> 
+                Ex #tmbclient.
+                  MbSendPublicKey(pk(mbLtk)) @ tmbclient & KU(pk(mbLtk)) @ tmbclient
+  )
+  &
+  (
+    All warrant mbLtk mbSign #tc.
+      ClientReceivedProxySignForSpb(warrant, pk(mbLtk), mbSign) @ tc
+      ==>
+        All delegation gy sPub #tmb.
+          ( MbGenerateProxySignForSpb(delegation, mbLtk, gy, warrant, mbSign) @ tmb & KU(gy) @ tmb & not(Ex #tmb. KU(mbLtk) @ tmb) )
+          &
+          ( MbReceiveProxyDelegationForSpb(sPub, pk(mbLtk), delegation) @ tmb )
+          ==>
+            All #ts.
+              ServerSendDelegation(sPub, pk(mbLtk), warrant, delegation) @ ts & KU(sPub) @ ts
+              ==> 
+                Ex #tmbclient.
+                  MbSendPublicKey(pk(mbLtk)) @ tmbclient & KU(pk(mbLtk)) @ tmbclient
+  )
+
+  //(
+  //  All S M s_pubkey mb_pubkey proxy_delegation #tmb.
+  //    MbReceiveProxyDelegation(S, M, s_pubkey, mb_pubkey, proxy_delegation) @ tmb
+  //    ==>
+  //      (
+  //        All warrant #ts.
+  //          ServerSendDelegation(S, M, s_pubkey, mb_pubkey, warrant, proxy_delegation) @ ts & KU(s_pubkey) @ ts
+  //          ==>
+  //            Ex #tmbclient.
+  //              MbSendPublicKey(mb_pubkey) @ tmbclient & KU(mb_pubkey) @ tmbclient
+  //      )
+  //      //|
+  //      //( Ex C #treveal. RevealMiddlebox(C) @ treveal & Honest(C) @ tmb )   // 넣을지 고민해 볼 것. 넣게되면 C -> M 으로 바꿔볼 것. reuse 여부 확인. 3번째 Lemma 병행 작업
+  //)
+  //// true
+  //// 올바른 대리서명자인 MB가 생성한 proxy signature가 유효한지 증명
+  //&
+  //(
+  //  All warrant mb_cert #tc.
+  //    ClientReceivedProxySign(warrant, mb_cert) @ tc
+  //    ==>
+  //      All c mb_ltk y gy s r t warrant mb_cert #tmb.
+  //        MbGenerateProxySign(c * mb_ltk, y, gy, s, r * mb_ltk, t, warrant, mb_cert) @ tmb & KU(gy) @ tmb & not(Ex #tmb. KU(mb_ltk) @ tmb)
+  //        ==>
+  //          Ex #tmbclient.
+  //            MbSendPublicKey(pk(mb_ltk)) @ tmbclient & KU(pk(mb_ltk)) @ tmbclient
+  //) // true. 검토결과: &를 기점으로 독립적으로 시행되는 것으로 보임. 통합시켜 볼 것!
+
+  //(
+  //  All warrant mb_cert #tc.
+  //    ClientReceivedProxySign(warrant, mb_cert) @ tc
+  //    ==>
+  //      All c mb_ltk y gy s r t #tmbGen.
+  //        MbGenerateProxySign(c * mb_ltk, y, gy, s, r * mb_ltk, t, warrant, mb_cert) @ tmbGen & KU(gy) @ tmbGen & not(Ex #tmbGen. KU(mb_ltk) @ tmbGen)
+  //        ==>
+  //          All S M s_pubkey proxy_delegation #tmb.
+  //            MbReceiveProxyDelegation(S, M, s_pubkey, pk(mb_ltk), proxy_delegation) @ tmb
+  //            ==>
+  //              All #ts.
+  //                ServerSendDelegation(S, M, s_pubkey, pk(mb_ltk), warrant, proxy_delegation) @ ts & KU(s_pubkey) @ ts
+  //                ==> 
+  //                  Ex #tmbclient.
+  //                    MbSendPublicKey(pk(mb_ltk)) @ tmbclient & KU(pk(mb_ltk)) @ tmbclient
+  //) // true
+"
+
+// Description: 
+// When client received proxy signature from middlebox, client can identify middlebox with its public key in proxy signature.
+// Formulae:
+// For warrant, middlebox's public key (mb_pubkey), middlebox's certificate (mb_cert), 
+lemma proxy_strong_identifiability:
+"
+  (
+    All warrant mbPub mbCert #tc.
+      ClientReceivedProxySign(warrant, mbPub, mbCert) @ tc
+      ==>
+        All delegation mbLtk gy sPub #tmb.
+          ( MbGenerateProxySign(delegation, mbLtk, gy, warrant, mbCert) @ tmb & KU(gy) @ tmb & not(Ex #tmb. KU(mbLtk) @ tmb) )
+          &
+          ( MbReceiveProxyDelegation( sPub, pk(mbLtk), delegation) @ tmb )
+          ==>
+            All #ts.
+              ServerSendDelegation( sPub, pk(mbLtk), warrant, delegation) @ ts & KU(sPub) @ ts
+              ==> 
+                Ex #tmbclient.
+                  MbSendPublicKey(pk(mbLtk)) @ tmbclient & KU(pk(mbLtk)) @ tmbclient & (mbPub = pk(mbLtk))
+  )
+  &
+  (
+    All warrant mbPub mbSign #tc.
+      ClientReceivedProxySignForSpb(warrant, mbPub, mbSign) @ tc
+      ==>
+        All delegation mbLtk gy sPub #tmb.
+          ( MbGenerateProxySignForSpb(delegation, mbLtk, gy, warrant, mbSign) @ tmb & KU(gy) @ tmb & not(Ex #tmb. KU(mbLtk) @ tmb) )
+          &
+          ( MbReceiveProxyDelegationForSpb( sPub, pk(mbLtk), delegation) @ tmb )
+          ==>
+            All #ts.
+              ServerSendDelegation( sPub, pk(mbLtk), warrant, delegation) @ ts & KU(sPub) @ ts
+              ==> 
+                Ex #tmbclient.
+                  MbSendPublicKey(pk(mbLtk)) @ tmbclient & KU(pk(mbLtk)) @ tmbclient & (mbPub = pk(mbLtk))
+  )
+" // 되면 rule noModification 추가
+
+end
