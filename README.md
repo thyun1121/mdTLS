@@ -24,15 +24,17 @@ On AWS EC2 c5a.24xlarge instance, verifying all lemmas takes 96 minutes.
   ### Command mode
    ![mdTLS_tamarin_verified_command](https://github.com/thyun1121/mdTLS/assets/18222806/2483cdb3-01aa-4cb2-89e0-967197897642)
   ### Interactive mode
-  - Welcome Page
-  - Source Lemma
+  #### Partial Deconstructions
+    ![partial deconstructions2](https://github.com/thyun1121/mdTLS/assets/18222806/f09a9bd4-8978-4cfe-85a3-a6f17b75f688)
+  #### Source Lemma
+    
   - Security Lemmas
     - Server Authentication (SA)
     - Middlebox Authentication (MA)
-    - Middlebox Authentication (MA)
-    - Middlebox Authentication (MA)
-    - Middlebox Authentication (MA)
-    - Middlebox Authentication (MA)
+    - Middlebox Path Integrity (MPI)
+    - Path Secrecy (MPS)
+    - Modification Accountability (MAC)
+    - Data Authentication (MA)
     - Verifiability (V)
     - Strong-Unforgeability (SU)
     - Strong-Identifiability (SI)
