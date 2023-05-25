@@ -4,7 +4,7 @@ We propose mdTLS protocol to improve performance based on the middlebox-aware TL
 out that the computational complexity of mdTLS is about twice as low as that of maTLS. 
 Furthermore, we verified that our proposal meets newly defined security goals as well as those verified by maTLS.
 
-We used Tamarin prover to evaluate security of mdTLS, we verified that the mdTLS protocol meets the security goals.
+By using Tamarin prover to evaluate security of mdTLS, we verified that the mdTLS protocol meets the security goals.
 
 We defined nine security lemmas and one source lemma for security verification.
 Six security lemmas are from maTLS and three other security lemmas are newly added to prove the security property of proxy signature, which are *Verifiability*, *Strong-Unforgeability*, and *Strong-Identifiability*.
