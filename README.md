@@ -7,7 +7,7 @@ Furthermore, we verified that our proposal meets newly defined security goals as
 We used Tamarin prover to evaluate security of mdTLS, we verified that the mdTLS protocol meets the security goals.
 
 We defined nine security lemmas and one source lemma for security verification.
-Six security lemmas are from maTLS and three other security lemmas are newly added to prove the security property of proxy signature, which are Verifiability, Strong-Unforgeability and Strong-Identifiability.
+Six security lemmas are from maTLS and three other security lemmas are newly added to prove the security property of proxy signature, which are *Verifiability*, *Strong-Unforgeability*, and *Strong-Identifiability*.
 
 
 
@@ -15,10 +15,12 @@ Six security lemmas are from maTLS and three other security lemmas are newly add
 - Command mode
   - To prove all lemmas in theory, execute command `$ tamarin-prover --prove mdTLS.spthy`
 - Interactive mode
-  - For GUI mode, after executing command `$ tamarin-prover interactive mdTLS.spthy`  then, point your browser to http://localhost:3001
+  - For GUI mode, execute command `$ tamarin-prover interactive mdTLS.spthy`  then, point your browser to http://localhost:3001
 
 ## Results of verifications
-On AWS EC2 c5a.24xlarge instance (96 vCPUs, 192 GiB Memories, and Ubuntu 22.05.2 LTS), verifying all lemmas takes 96 minutes.
+On AWS EC2 c5a.24xlarge instance, verifying all lemmas takes 96 minutes.
+- 96 vCPUs, 192 GiB Memories
+- Ubuntu 22.05.2 LTS
   ### Command mode
    ![mdTLS_tamarin_verified_command](https://github.com/thyun1121/mdTLS/assets/18222806/2483cdb3-01aa-4cb2-89e0-967197897642)
   ### Interactive mode
