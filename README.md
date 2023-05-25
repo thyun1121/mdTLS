@@ -28,14 +28,14 @@ On AWS EC2 c5a.24xlarge instance, verifying all lemmas takes 96 minutes.
     ![partial deconstructions2](https://github.com/thyun1121/mdTLS/assets/18222806/f09a9bd4-8978-4cfe-85a3-a6f17b75f688)
   #### Source Lemma
     
-  - Security Lemmas
-    - Server Authentication (SA)
-    - Middlebox Authentication (MA)
-    - Middlebox Path Integrity (MPI)
-    - Path Secrecy (MPS)
-    - Modification Accountability (MAC)
-    - Data Authentication (MA)
-    - Verifiability (V)
-    - Strong-Unforgeability (SU)
-    - Strong-Identifiability (SI)
+  #### Security Lemmas
+  ##### - Server Authentication (SA)
+  ##### - Middlebox Authentication (MA)
+  ##### - Middlebox Path Integrity (MPI)
+  ##### - Path Secrecy (MPS)
+  ##### - Modification Accountability (MAC)
+  ##### - Data Authentication (MA)
+  ##### - Verifiability (V)
+  ##### - Strong-Unforgeability (SU)
+  ##### - Strong-Identifiability (SI)
 
