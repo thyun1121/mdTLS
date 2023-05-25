@@ -18,9 +18,9 @@ Six security lemmas are from maTLS and three other security lemmas are newly add
   - For GUI mode, after executing command `$ tamarin-prover interactive mdTLS.spthy`  then, point your browser to http://localhost:3001
 
 ## Results of verifications
-- Results of command mode
-![mdTLS_tamarin_verified_command](https://github.com/thyun1121/mdTLS/assets/18222806/2483cdb3-01aa-4cb2-89e0-967197897642)
-- Results of interactive mode
+  ### Command mode
+   ![mdTLS_tamarin_verified_command](https://github.com/thyun1121/mdTLS/assets/18222806/2483cdb3-01aa-4cb2-89e0-967197897642)
+  ### Interactive mode
   - Welcome Page
   - Source Lemma
   - Security Lemmas
