@@ -18,6 +18,7 @@ Six security lemmas are from maTLS and three other security lemmas are newly add
   - For GUI mode, after executing command `$ tamarin-prover interactive mdTLS.spthy`  then, point your browser to http://localhost:3001
 
 ## Results of verifications
+On AWS EC2 c5a.24xlarge instance (96 vCPUs, 192 GiB Memories, and Ubuntu 22.05.2 LTS), verifying all lemmas takes 96 minutes.
   ### Command mode
    ![mdTLS_tamarin_verified_command](https://github.com/thyun1121/mdTLS/assets/18222806/2483cdb3-01aa-4cb2-89e0-967197897642)
   ### Interactive mode
@@ -33,4 +34,4 @@ Six security lemmas are from maTLS and three other security lemmas are newly add
     - Verifiability (V)
     - Strong-Unforgeability (SU)
     - Strong-Identifiability (SI)
-- On AWS EC2 c5a.24xlarge instance (), verifying all lemmas takes 96 minutes.
+
