@@ -61,7 +61,7 @@ On AWS EC2 c5a.24xlarge instance, verifying all lemmas takes 96 minutes in comma
     ![sa_proved](https://github.com/thyun1121/mdTLS/assets/18222806/274b0578-801e-4a72-bfc6-03dabbd2e9d6)
     
   #### - Middlebox Authentication (MA)
-    ![ma_proved](https://github.com/thyun1121/mdTLS/assets/18222806/bf45074b-01c2-4da2-966d-d00777ab989e)
+    ![ma_proved](https://github.com/thyun1121/mdTLS/assets/18222806/d17500f2-2390-473c-93c8-bf815def4308)
 
   #### - Middlebox Path Integrity (MPI)
     ![mpi_proved](https://github.com/thyun1121/mdTLS/assets/18222806/3d8f2c9b-d35d-4672-96a0-410afb1cc58c)
@@ -70,7 +70,7 @@ On AWS EC2 c5a.24xlarge instance, verifying all lemmas takes 96 minutes in comma
     ![mps_proved](https://github.com/thyun1121/mdTLS/assets/18222806/dd8b6db3-7f5e-4fb8-8b0e-205092a1e238)
 
   #### -  Modification Accountability (MAC)
-    ![mac_proved](https://github.com/thyun1121/mdTLS/assets/18222806/1b92480f-50af-4601-8031-783ddf7a316e)
+    ![mac_proved](https://github.com/thyun1121/mdTLS/assets/18222806/56e29a57-4200-409b-b127-7fab0d4a5bb3)
 
   #### -  Data Authentication (DA)
     ![da_proved](https://github.com/thyun1121/mdTLS/assets/18222806/ee1635fe-6dab-452f-8a17-3acaa722a41a)
