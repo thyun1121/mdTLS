@@ -15,6 +15,7 @@ Server generates its certificate as in original TLS.
 - Client has to verify two types of signature, one is original signature and the other is proxy signature. In order to verify proxy signature, client needs proxy public keys, which are generated according to the proxy signature verification method.
 - Proxy signature is also used in Security Parameter Blocks by middlebox.
 ### Stage 2. Record Phase
+![mdTLS_record_darkmode_v0 2](https://github.com/thyun1121/mdTLS/assets/18222806/f7b48a8e-af9a-4ca2-9450-c4c3857a9556)
 - Client and server sends request and response with Modification Log, as maTLS, to check whether payload has been changed while being transmission.
 
 ## Security Evaluation
@@ -47,7 +48,7 @@ On AWS EC2 c5a.24xlarge instance, verifying all lemmas takes 96 minutes in comma
   #### > Command mode
    ![mdTLS_tamarin_verified_command](https://github.com/thyun1121/mdTLS/assets/18222806/2483cdb3-01aa-4cb2-89e0-967197897642)
   
-    
+  <!-- 
   ### > Interactive mode
   #### Partial Deconstructions
     ![partial deconstructions2](https://github.com/thyun1121/mdTLS/assets/18222806/f09a9bd4-8978-4cfe-85a3-a6f17b75f688)
@@ -82,6 +83,6 @@ On AWS EC2 c5a.24xlarge instance, verifying all lemmas takes 96 minutes in comma
     ![su_proved](https://github.com/thyun1121/mdTLS/assets/18222806/c6f0b53d-17a3-428d-90a5-8f7c48d50535)
 
   #### -  Strong-Identifiability (SI)
-    ![si_proved](https://github.com/thyun1121/mdTLS/assets/18222806/a2d33373-0510-4319-bf7e-fd0918fe5e4f)
+    ![si_proved](https://github.com/thyun1121/mdTLS/assets/18222806/a2d33373-0510-4319-bf7e-fd0918fe5e4f) -->  
 
 
